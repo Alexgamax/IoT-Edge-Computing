@@ -1,157 +1,111 @@
 <!DOCTYPE html>
 <html lang="es">
-
 <head>
-
     <meta charset="UTF-8">
-
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
     <title>Invernadero Inteligente</title>
-
     <link rel="stylesheet" href="style.css">
-
 </head>
-
 <body>
-
     <header>
-
         <h1> Invernadero Inteligente</h1>
-
         <p>Monitoreo en tiempo real</p>
-
     </header>
-
-
     <main>
-
         <section class="estado">
-
             <div>
-
                 <span class="indicador"></span>
-
                 <span id="conexion">
                     Conectando...
                 </span>
-
             </div>
-
             <p id="actualizacion">
                 Esperando datos...
             </p>
-
         </section>
-
-
         <section class="sensores">
-
-            <!-- HUMEDAD -->
-
             <div class="card">
-
                 <div class="icono">
-                    
                 </div>
-
                 <h2>
                     Humedad del suelo
                 </h2>
-
                 <div class="valor">
-
                     <span id="humedad">
                         --
                     </span>
-
                     <span>
                         %
                     </span>
-
                 </div>
-
                 <p>
                     Sensor HW-390
                 </p>
-
             </div>
-
-
-            <!-- LUZ -->
-
             <div class="card">
-
                 <div class="icono">
-                    
                 </div>
-
+                <h2>
+                    Temperatura
+                </h2>
+                <div class="valor">
+                    <span id="temperatura">
+                        --
+                    </span>
+                    <span>
+                        ºC
+                    </span>
+                </div>
+                <p>
+                    Sensor LM35
+                </p>
+            </div>
+            <div class="card">
+                <div class="icono">
+                </div>
                 <h2>
                     Luz ambiental
                 </h2>
-
                 <div class="valor">
-
                     <span id="luz">
                         --
                     </span>
-
                     <span>
                         %
                     </span>
-
                 </div>
-
                 <p>
                     Sensor OKI3101
                 </p>
-
             </div>
-
         </section>
-
-
         <section class="informacion">
-
             <h2>
                 Últimas lecturas
             </h2>
-
             <div class="datos">
-
                 <p>
                     Humedad:
                     <strong id="humedad2">--</strong> %
                 </p>
-
+                <p>
+                    Temperatura:
+                    <strong id="temperatura2">--</strong> ºC
+                </p>
                 <p>
                     Luz:
                     <strong id="luz2">--</strong> %
                 </p>
-
                 <p>
                     Última lectura:
                     <strong id="hora">--</strong>
                 </p>
-
             </div>
-
         </section>
-
     </main>
-
-
     <footer>
-
-        <p>
-            Sistema IoT de agricultura de precisión
-        </p>
-
+        <p>Sistema IoT de agricultura de precisión</p>
     </footer>
-
-
     <script src="script.js"></script>
-
 </body>
-
 </html>

@@ -1,49 +1,31 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-// =========================
-// CONFIGURACIÓN WIFI
-// =========================
+const char* ssid = "Totalplay-2.4G-4a08";
+const char* password = "nVm2476ndThz4EfM";
 
-const char* ssid = "NOMBRE_DE_TU_WIFI";
-const char* password = "CONTRASEÑA_DE_TU_WIFI";
+// Direccion
+const char* servidor = "http://192.168.100.17:8000/lecturas"; // CAMBIAR POR TU IP
 
-// Dirección de la computadora donde corre FastAPI
-const char* servidor = "http://192.168.1.100:8000/lecturas"; // CAMBIAR
-
-// =========================
-// PINES
-// =========================
-
-const int PIN_HUMEDAD = 34;
-const int PIN_LUZ = 35;
-
-// =========================
-// CALIBRACIÓN HUMEDAD
-// =========================
-
-// Estos valores SON DE EJEMPLO.
-// Tu compañero deberá obtenerlos físicamente.
+const int PIN_HUMEDAD = 34; // Capacitive Soil Moisture Sensor
+const int PIN_LUZ = 35;     // Fotorresistencia (LDR)
+const int PIN_LM35 = 32;    // Sensor de Temperatura LM35 (Pin Central VOUT)
 
 const int HUMEDAD_SECO = 3200;
 const int HUMEDAD_HUMEDO = 1400;
 
-// =========================
-// SETUP
-// =========================
+float convertirHumedad(int valorADC);
+float convertirLuz(int valorADC);
+float convertirTemperatura(int valorADC);
+void enviarDatos(float humedad, float luz, float temperatura);
 
 void setup() {
-
   Serial.begin(115200);
-
   delay(1000);
 
-  // Configurar ADC
   analogReadResolution(12);
 
-  // Conectar WiFi
   WiFi.begin(ssid, password);
-
   Serial.print("Conectando a WiFi");
 
   while (WiFi.status() != WL_CONNECTED) {
@@ -52,57 +34,46 @@ void setup() {
   }
 
   Serial.println();
-  Serial.println("WiFi conectado");
-
-  Serial.print("IP de la ESP32: ");
+  Serial.println("WiFi conectado con éxito");
+  Serial.print("IP asignada a la ESP32: ");
   Serial.println(WiFi.localIP());
 }
 
-// =========================
-// LOOP
-// =========================
-
 void loop() {
-
-  // Leer sensores
   int humedadADC = analogRead(PIN_HUMEDAD);
   int luzADC = analogRead(PIN_LUZ);
+  int tempADC = analogRead(PIN_LM35);
 
-  // Convertir humedad a porcentaje
   float humedad = convertirHumedad(humedadADC);
-
-  // Convertir luz a porcentaje relativo
   float luz = convertirLuz(luzADC);
+  float temperatura = convertirTemperatura(tempADC);
 
-  // Mostrar por monitor serial
-  Serial.println("----------------------------");
+  Serial.println("\n--- Lecturas de Sensores ---");
 
-  Serial.print("Humedad suelo ADC: ");
-  Serial.println(humedadADC);
-
-  Serial.print("Humedad suelo: ");
+  Serial.print("Humedad Suelo ADC: ");
+  Serial.print(humedadADC);
+  Serial.print(" | ");
   Serial.print(humedad);
   Serial.println(" %");
 
-  Serial.print("Luz ADC: ");
-  Serial.println(luzADC);
-
-  Serial.print("Luz ambiental: ");
+  Serial.print("Luz Ambiental ADC: ");
+  Serial.print(luzADC);
+  Serial.print(" | ");
   Serial.print(luz);
   Serial.println(" %");
 
-  // Enviar al servidor
-  enviarDatos(humedad, luz);
+  Serial.print("Temperatura LM35 ADC: ");
+  Serial.print(tempADC);
+  Serial.print(" | ");
+  Serial.print(temperatura);
+  Serial.println(" °C");
 
-  delay(5000);
+  enviarDatos(humedad, luz, temperatura);
+
+  delay(5000); 
 }
 
-// =========================
-// CONVERSIÓN HUMEDAD
-// =========================
-
 float convertirHumedad(int valorADC) {
-
   float porcentaje = map(
     valorADC,
     HUMEDAD_HUMEDO,
@@ -111,75 +82,53 @@ float convertirHumedad(int valorADC) {
     0
   );
 
-  porcentaje = constrain(porcentaje, 0, 100);
-
-  return porcentaje;
+  return constrain(porcentaje, 0, 100);
 }
-
-// =========================
-// CONVERSIÓN LUZ
-// =========================
 
 float convertirLuz(int valorADC) {
-
   float porcentaje = (valorADC / 4095.0) * 100.0;
-
-  porcentaje = constrain(porcentaje, 0, 100);
-
-  return porcentaje;
+  return constrain(porcentaje, 0, 100);
 }
 
-// =========================
-// ENVIAR DATOS
-// =========================
+float convertirTemperatura(int valorADC) {
+  // El ADC mide de 0 a 3.3V (3300 mV) en 4095 pasos.
+  // El LM35 entrega 10 mV por cada 1 °C.
+  float voltajemV = (valorADC / 4095.0) * 3300.0;
+  float tempC = voltajemV / 10.0;
+  return tempC;
+}
 
-void enviarDatos(float humedad, float luz) {
-
+void enviarDatos(float humedad, float luz, float temperatura) {
   if (WiFi.status() != WL_CONNECTED) {
-
-    Serial.println("WiFi desconectado");
-
+    Serial.println("Error: WiFi desconectado. Reintentando...");
     return;
   }
 
   HTTPClient http;
-
   http.begin(servidor);
-
   http.addHeader("Content-Type", "application/json");
 
-  // Crear JSON
   String json = "{";
-
-  json += "\"humedad_suelo\":";
-  json += String(humedad, 2);
-
-  json += ",";
-
-  json += "\"luz\":";
-  json += String(luz, 2);
-
+  json += "\"humedad_suelo\":" + String(humedad, 2) + ",";
+  json += "\"luz\":" + String(luz, 2) + ",";
+  json += "\"temperatura\":" + String(temperatura, 2);
   json += "}";
 
-  Serial.println("Enviando:");
+  Serial.println("Enviando JSON:");
   Serial.println(json);
 
-  int codigo = http.POST(json);
+  int codigoRespuesta = http.POST(json);
 
-  Serial.print("Código HTTP: ");
-  Serial.println(codigo);
+  Serial.print("Código de respuesta HTTP: ");
+  Serial.println(codigoRespuesta);
 
-  if (codigo > 0) {
-
+  if (codigoRespuesta > 0) {
     String respuesta = http.getString();
-
-    Serial.println("Respuesta:");
+    Serial.println("Respuesta del Servidor:");
     Serial.println(respuesta);
-
   } else {
-
-    Serial.println("Error al enviar datos");
-
+    Serial.print("Error en envío HTTP: ");
+    Serial.println(http.errorToString(codigoRespuesta).c_str());
   }
 
   http.end();

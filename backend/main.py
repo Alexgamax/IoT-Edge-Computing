@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from datetime import datetime
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 app = FastAPI(
@@ -8,31 +9,25 @@ app = FastAPI(
     version="1.0"
 )
 
-
-# =========================
-# MODELO DE DATOS
-# =========================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class Lectura(BaseModel):
-
     humedad_suelo: float
     luz: float
-
-
-# =========================
-# VARIABLE PARA ÚLTIMA LECTURA
-# =========================
+    temperatura: float
 
 ultima_lectura = {
     "humedad_suelo": 0,
     "luz": 0,
+    "temperatura": 0,
     "timestamp": None
 }
-
-
-# =========================
-# RECIBIR DATOS DE ESP32
-# =========================
 
 @app.post("/lecturas")
 def recibir_lectura(lectura: Lectura):
@@ -42,6 +37,7 @@ def recibir_lectura(lectura: Lectura):
     ultima_lectura = {
         "humedad_suelo": lectura.humedad_suelo,
         "luz": lectura.luz,
+        "temperatura": lectura.temperatura,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -53,20 +49,10 @@ def recibir_lectura(lectura: Lectura):
         "datos": ultima_lectura
     }
 
-
-# =========================
-# OBTENER ÚLTIMA LECTURA
-# =========================
-
 @app.get("/lecturas")
 def obtener_lectura():
 
     return ultima_lectura
-
-
-# =========================
-# ESTADO DEL SERVIDOR
-# =========================
 
 @app.get("/")
 def inicio():
