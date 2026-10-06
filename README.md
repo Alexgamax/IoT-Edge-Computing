@@ -7,6 +7,7 @@ en un invernadero mediante ESP32.
 
 - HW-390 / 20210603: sensor capacitivo analógico de humedad del suelo.
 - OKI3101: módulo de fotoresistencia LDR para medir luz ambiental.
+- LM35: sensor sensor analógico de temperatura.
 
 ## Arquitectura
 
@@ -19,6 +20,11 @@ ESP32 → WiFi → FastAPI → Dashboard Web
 El sensor HW-390 proporciona una lectura analógica
 que es convertida a un porcentaje de humedad después
 de realizar la calibración física.
+
+### Temperatura ambiental
+
+El sensor LM35 proporciona una lectura analógica
+que es convertida a grados celsius.
 
 ### Luz ambiental
 
