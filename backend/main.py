@@ -1,13 +1,48 @@
-from fastapi import FastAPI
+import asyncio
+import json
+import time
 from datetime import datetime
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from contextlib import asynccontextmanager
 
-app = FastAPI(
-    title="Invernadero Inteligente",
-    description="API para monitoreo de humedad del suelo y luz ambiental",
-    version="1.0"
-)
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+import paho.mqtt.client as mqtt
+import joblib
+import numpy as np
+
+from database import init_db, AsyncSessionLocal
+from models import Telemetria
+
+# Modelo Random Forest
+try:
+    rf_model = joblib.load("random_forest_model.pkl")
+    print("Modelo Random Forest cargado exitosamente.")
+except Exception as e:
+    print(f"Error cargando el modelo Random Forest: {e}")
+    rf_model = None
+
+# Ciclo de Vida de FastAPI 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    
+    try:
+        mqtt_client.connect("localhost", 1883, 60)
+        mqtt_client.loop_start()
+        print("Cliente MQTT conectado e iniciado en segundo plano.")
+    except Exception as e:
+        print(f"Error conectando al Broker MQTT: {e}")
+        
+    yield
+    
+    mqtt_client.loop_stop()
+    mqtt_client.disconnect()
+    print("Servicio MQTT detenido.")
+
+app = FastAPI(title="Middleware IoT con IA - Práctica 3", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,47 +52,126 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class Lectura(BaseModel):
-    humedad_suelo: float
-    luz: float
-    temperatura: float
+# Conexiones WebSocket
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
 
-ultima_lectura = {
-    "humedad_suelo": 0,
-    "luz": 0,
-    "temperatura": 0,
-    "timestamp": None
-}
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
 
-@app.post("/lecturas")
-def recibir_lectura(lectura: Lectura):
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
 
-    global ultima_lectura
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception:
+                pass
 
-    ultima_lectura = {
-        "humedad_suelo": lectura.humedad_suelo,
-        "luz": lectura.luz,
-        "temperatura": lectura.temperatura,
-        "timestamp": datetime.now().isoformat()
-    }
+manager = ConnectionManager()
+main_loop = None
 
-    print("Nueva lectura recibida:")
-    print(ultima_lectura)
+@app.on_event("startup")
+def set_loop():
+    global main_loop
+    main_loop = asyncio.get_event_loop()
 
-    return {
-        "mensaje": "Lectura recibida correctamente",
-        "datos": ultima_lectura
-    }
 
-@app.get("/lecturas")
-def obtener_lectura():
+# Procesamiento de Telemetría y Persistencia
+async def procesar_y_guardar_telemetria(payload_str: str):
+    t_recepcion_epoch_ms = int(time.time() * 1000)
+    
+    try:
+        data_json = json.loads(payload_str)
+        
+        node_id = data_json.get("node_id", "DESCONOCIDO")
+        sequence_id = data_json.get("sequence_id", 0)
+        sent_epoch_ms = data_json.get("sent_at_epoch_ms", 0)
+        
+        # Latencia
+        latencia_ms = t_recepcion_epoch_ms - sent_epoch_ms if sent_epoch_ms > 0 else 0.0
+        
+        sensores = data_json.get("data", {})
+        humedad = sensores.get("humedad_suelo_pct", 0.0)
+        luz = sensores.get("luz_pct", 0.0)
+        temperatura = sensores.get("temperatura_c", 0.0)
+        
+        # Inferencia con Random Forest
+        clase_predicha = "Desconocido"
+        if rf_model is not None:
+            X_input = np.array([[humedad, luz, temperatura]])
+            clase_predicha = str(rf_model.predict(X_input)[0])
+            
+        async with AsyncSessionLocal() as session:
+            nueva_lectura = Telemetria(
+                sequence_id=sequence_id,
+                node_id=node_id,
+                humedad_suelo_pct=humedad,
+                luz_pct=luz,
+                temperatura_c=temperatura,
+                clase_predicha_rf=clase_predicha,
+                latencia_ms=latencia_ms
+            )
+            session.add(nueva_lectura)
+            await session.commit()
+            
+        #Payload
+        payload_enriquecido = {
+            "sequence_id": sequence_id,
+            "node_id": node_id,
+            "data": {
+                "humedad_suelo_pct": humedad,
+                "luz_pct": luz,
+                "temperatura_c": temperatura
+            },
+            "diagnostico_rf": clase_predicha,
+            "latencia_ms": latencia_ms,
+            "timestamp_recepcion": datetime.utcnow().isoformat()
+        }
+        
+        await manager.broadcast(json.dumps(payload_enriquecido))
+        
+    except Exception as e:
+        print(f"Error procesando la telemetría: {e}")
 
-    return ultima_lectura
+# Callbacks y Configuración MQTT
+def on_connect(client, userdata, flags, rc):
+    print(f"MQTT Conectado con código de estado: {rc}")
+    client.subscribe("invernadero/telemetria")
 
-@app.get("/")
-def inicio():
+def on_message(client, userdata, msg):
+    payload_str = msg.payload.decode("utf-8")
+    if main_loop and main_loop.is_running():
+        asyncio.run_coroutine_threadsafe(procesar_y_guardar_telemetria(payload_str), main_loop)
 
-    return {
-        "mensaje": "API del Invernadero Inteligente funcionando",
-        "estado": "activo"
-    }
+mqtt_client = mqtt.Client()
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+
+# Endpoints HTTP y WebSockets
+
+@app.websocket("/ws/telemetria")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            cmd_json = json.loads(data)
+            mqtt_client.publish("invernadero/control", json.dumps(cmd_json))
+            print(f"Comando de actuación enviado a ESP32: {cmd_json}")
+            
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+@app.get("/api/historico")
+async def obtener_historico(limit: int = 50):
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Telemetria).order_by(Telemetria.id.desc()).limit(limit)
+        )
+        registros = result.scalars().all()
+        return registros
