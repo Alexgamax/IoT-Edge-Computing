@@ -1,135 +1,125 @@
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include <PubSubClient.h>
+#include <time.h>
+#include <sys/time.h>
 
-const char* ssid = "Totalplay-2.4G-4a08";
-const char* password = "nVm2476ndThz4EfM";
+const char* WIFI_SSID = "Totalplay-2.4G-4a08";
+const char* WIFI_PASSWORD = "nVm2476ndThz4EfM";
+const char* MQTT_HOST = "192.168.100.17"; // IP LAN Mosquitto
+const int MQTT_PORT = 1883;
 
-// Direccion
-const char* servidor = "http://192.168.100.17:8000/lecturas"; // CAMBIAR POR TU IP
+const char* TOPIC_TELEMETRIA = "invernadero/telemetria";
+const char* TOPIC_CONTROL = "invernadero/control";
 
-const int PIN_HUMEDAD = 34; // Capacitive Soil Moisture Sensor
-const int PIN_LUZ = 35;     // Fotorresistencia (LDR)
-const int PIN_LM35 = 32;    // Sensor de Temperatura LM35 (Pin Central VOUT)
+const int PIN_HUMEDAD_SUELO = 34; // Potenciómetro / HW-390
+const int PIN_LUZ = 35;           // LDR Casera
+const int PIN_LM35 = 32;          // LM35 Temperatura
+const int PIN_ACTUADOR = 26;      // Salida lógica para actuación (LED / Relé)
 
-const int HUMEDAD_SECO = 3200;
-const int HUMEDAD_HUMEDO = 1400;
+unsigned long SEND_INTERVAL_MS = 500; // Intervalo de envío (ensayar 100, 500 y 1000 ms)
 
-float convertirHumedad(int valorADC);
-float convertirLuz(int valorADC);
-float convertirTemperatura(int valorADC);
-void enviarDatos(float humedad, float luz, float temperatura);
+WiFiClient net;
+PubSubClient mqtt(net);
+unsigned long lastSend = 0;
+uint32_t sequenceId = 0;
 
-void setup() {
-  Serial.begin(115200);
-  delay(1000);
+long epochMillis() {
+  struct timeval tv;
+  gettimeofday(&tv, nullptr);
+  if (tv.tv_sec < 1700000000) return 0; // Reloj aún no sincronizado por NTP
+  return (long)((long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000);
+}
 
-  analogReadResolution(12);
+void callback(char* topic, byte* payload, unsigned int len) {
+  String msg;
+  for (unsigned int i = 0; i < len; i++) msg += (char)payload[i];
+  
+  if (String(topic) == TOPIC_CONTROL) {
+    Serial.printf("Comando de control recibido: %s\n", msg.c_str());
+    if (msg.indexOf("\"value\":true") >= 0 || msg.indexOf("ON") >= 0) {
+      digitalWrite(PIN_ACTUADOR, HIGH);
+      Serial.println("-> Actuador ENCENDIDO");
+    } 
+    else if (msg.indexOf("\"value\":false") >= 0 || msg.indexOf("OFF") >= 0) {
+      digitalWrite(PIN_ACTUADOR, LOW);
+      Serial.println("-> Actuador APAGADO");
+    }
+  }
+}
 
-  WiFi.begin(ssid, password);
-  Serial.print("Conectando a WiFi");
-
-  while (WiFi.status() != WL_CONNECTED) {
+void connectWiFi() {
+  if (WiFi.status() == WL_CONNECTED) return;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) {
     delay(500);
     Serial.print(".");
   }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi Conectado!");
+    Serial.print("IP ESP32: "); 
+    Serial.println(WiFi.localIP());
+    configTime(-6 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+  }
+}
 
-  Serial.println();
-  Serial.println("WiFi conectado con éxito");
-  Serial.print("IP asignada a la ESP32: ");
-  Serial.println(WiFi.localIP());
+void connectMQTT() {
+  while (!mqtt.connected()) {
+    Serial.print("Conectando a Broker MQTT...");
+    if (mqtt.connect("ESP32_INVERNADERO_01")) {
+      Serial.println(" Conectado!");
+      mqtt.subscribe(TOPIC_CONTROL); 
+    } else {
+      Serial.printf(" Falló rc=%d; reintento en 2s\n", mqtt.state());
+      delay(2000);
+      if (WiFi.status() != WL_CONNECTED) connectWiFi();
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_ACTUADOR, OUTPUT);
+  digitalWrite(PIN_ACTUADOR, LOW);
+  
+  analogReadResolution(12);
+  connectWiFi();
+  
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(callback);
+  mqtt.setBufferSize(512);
 }
 
 void loop() {
-  int humedadADC = analogRead(PIN_HUMEDAD);
-  int luzADC = analogRead(PIN_LUZ);
-  int tempADC = analogRead(PIN_LM35);
+  if (WiFi.status() != WL_CONNECTED) connectWiFi();
+  if (!mqtt.connected()) connectMQTT();
+  mqtt.loop();
 
-  float humedad = convertirHumedad(humedadADC);
-  float luz = convertirLuz(luzADC);
-  float temperatura = convertirTemperatura(tempADC);
+  unsigned long now = millis();
+  if (now - lastSend >= SEND_INTERVAL_MS) {
+    lastSend = now;
 
-  Serial.println("\n--- Lecturas de Sensores ---");
+    int rawSoil = analogRead(PIN_HUMEDAD_SUELO);
+    int rawLight = analogRead(PIN_LUZ);
+    int rawTemp = analogRead(PIN_LM35);
 
-  Serial.print("Humedad Suelo ADC: ");
-  Serial.print(humedadADC);
-  Serial.print(" | ");
-  Serial.print(humedad);
-  Serial.println(" %");
+    float soilPct = constrain(100.0f * (4095.0f - rawSoil) / 4095.0f, 0.0f, 100.0f);
+    float lightPct = constrain((rawLight / 4095.0f) * 100.0f, 0.0f, 100.0f);
+    float tempC = ((rawTemp / 4095.0f) * 3300.0f) / 10.0f; // LM35: 10mV/°C
 
-  Serial.print("Luz Ambiental ADC: ");
-  Serial.print(luzADC);
-  Serial.print(" | ");
-  Serial.print(luz);
-  Serial.println(" %");
+    long sentEpoch = epochMillis();
 
-  Serial.print("Temperatura LM35 ADC: ");
-  Serial.print(tempADC);
-  Serial.print(" | ");
-  Serial.print(temperatura);
-  Serial.println(" °C");
+    char payload[384];
+    snprintf(payload, sizeof(payload),
+      "{\"node_id\":\"ESP32_INVERNADERO_01\",\"sequence_id\":%lu,"
+      "\"timestamp_ms\":%lu,\"sent_at_epoch_ms\":%ld,"
+      "\"data\":{\"humedad_suelo_pct\":%.2f,\"luz_pct\":%.2f,\"temperatura_c\":%.2f}}",
+      (unsigned long)sequenceId++, now, sentEpoch, soilPct, lightPct, tempC);
 
-  enviarDatos(humedad, luz, temperatura);
-
-  delay(5000); 
-}
-
-float convertirHumedad(int valorADC) {
-  float porcentaje = map(
-    valorADC,
-    HUMEDAD_HUMEDO,
-    HUMEDAD_SECO,
-    100,
-    0
-  );
-
-  return constrain(porcentaje, 0, 100);
-}
-
-float convertirLuz(int valorADC) {
-  float porcentaje = (valorADC / 4095.0) * 100.0;
-  return constrain(porcentaje, 0, 100);
-}
-
-float convertirTemperatura(int valorADC) {
-  // El ADC mide de 0 a 3.3V (3300 mV) en 4095 pasos.
-  // El LM35 entrega 10 mV por cada 1 °C.
-  float voltajemV = (valorADC / 4095.0) * 3300.0;
-  float tempC = voltajemV / 10.0;
-  return tempC;
-}
-
-void enviarDatos(float humedad, float luz, float temperatura) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Error: WiFi desconectado. Reintentando...");
-    return;
+    bool ok = mqtt.publish(TOPIC_TELEMETRIA, payload);
+    Serial.printf("Publish [%s] ID:%lu -> %s\n", ok ? "OK" : "ERROR", sequenceId - 1, payload);
   }
-
-  HTTPClient http;
-  http.begin(servidor);
-  http.addHeader("Content-Type", "application/json");
-
-  String json = "{";
-  json += "\"humedad_suelo\":" + String(humedad, 2) + ",";
-  json += "\"luz\":" + String(luz, 2) + ",";
-  json += "\"temperatura\":" + String(temperatura, 2);
-  json += "}";
-
-  Serial.println("Enviando JSON:");
-  Serial.println(json);
-
-  int codigoRespuesta = http.POST(json);
-
-  Serial.print("Código de respuesta HTTP: ");
-  Serial.println(codigoRespuesta);
-
-  if (codigoRespuesta > 0) {
-    String respuesta = http.getString();
-    Serial.println("Respuesta del Servidor:");
-    Serial.println(respuesta);
-  } else {
-    Serial.print("Error en envío HTTP: ");
-    Serial.println(http.errorToString(codigoRespuesta).c_str());
-  }
-
-  http.end();
 }
