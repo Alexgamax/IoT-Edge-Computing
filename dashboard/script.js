@@ -10,16 +10,53 @@ function inicializarGrafica() {
         data: {
             labels: [],
             datasets: [
-                { label: 'Humedad Suelo (%)', borderColor: '#0dcaf0', data: [], fill: false, tension: 0.2 },
-                { label: 'Luz (%)', borderColor: '#ffc107', data: [], fill: false, tension: 0.2 },
-                { label: 'Temperatura (°C)', borderColor: '#dc3545', data: [], fill: false, tension: 0.2 }
+                { 
+                    label: 'Humedad Suelo (%)', 
+                    borderColor: '#0dcaf0', 
+                    backgroundColor: 'rgba(13, 202, 240, 0.1)',
+                    data: [], 
+                    fill: false, 
+                    tension: 0.2,
+                    borderWidth: 2,
+                    pointRadius: 3
+                },
+                { 
+                    label: 'Luz (%)', 
+                    borderColor: '#ffc107', 
+                    backgroundColor: 'rgba(255, 193, 7, 0.1)',
+                    data: [], 
+                    fill: false, 
+                    tension: 0.2,
+                    borderWidth: 2,
+                    pointRadius: 3
+                },
+                { 
+                    label: 'Temperatura (°C)', 
+                    borderColor: '#dc3545', 
+                    backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                    data: [], 
+                    fill: false, 
+                    tension: 0.2,
+                    borderWidth: 2,
+                    pointRadius: 3
+                }
             ]
         },
         options: {
             responsive: true,
+            maintainAspectRatio: false, // CRÍTICO: Permite que tome los 320px de alto del contenedor
+            animation: false,
             scales: {
-                x: { display: true, title: { display: true, text: 'Hora' } },
-                y: { beginAtZero: true, max: 100 }
+                x: { 
+                    display: true, 
+                    title: { display: true, text: 'Tiempo (Hora)' } 
+                },
+                y: { 
+                    display: true,
+                    beginAtZero: true,
+                    max: 100,
+                    title: { display: true, text: 'Valor (%) / (°C)' }
+                }
             }
         }
     });
@@ -36,12 +73,11 @@ function conectarWebSocket() {
 
     socket.onmessage = function(event) {
         const payload = JSON.parse(event.data);
-        console.log("Lectura recibida:", payload);
 
         if (payload.data) {
-            const hum = payload.data.humedad_suelo_pct;
-            const luz = payload.data.luz_pct;
-            const temp = payload.data.temperatura_c;
+            const hum = parseFloat(payload.data.humedad_suelo_pct);
+            const luz = parseFloat(payload.data.luz_pct);
+            const temp = parseFloat(payload.data.temperatura_c);
 
             document.getElementById("humedad").textContent = hum.toFixed(1);
             document.getElementById("luz").textContent = luz.toFixed(1);
@@ -60,25 +96,33 @@ function conectarWebSocket() {
                 badge.className = "badge bg-success badge-status";
             }
 
+            const elemDetalles = document.getElementById("detallesIaa");
+            if (elemDetalles) {
+                elemDetalles.textContent = `Vector input: [H: ${hum.toFixed(1)}%, L: ${luz.toFixed(1)}%, T: ${temp.toFixed(1)}°C]`;
+            }
+
             const horaActual = new Date().toLocaleTimeString();
             document.getElementById("actualizacion").textContent = "Última act: " + horaActual;
 
             if (chart) {
-                if (chart.data.labels.length > 20) {
+                if (chart.data.labels.length > 15) {
                     chart.data.labels.shift();
-                    chart.data.datasets.forEach(dataset => dataset.data.shift());
+                    chart.data.datasets[0].data.shift();
+                    chart.data.datasets[1].data.shift();
+                    chart.data.datasets[2].data.shift();
                 }
+                
                 chart.data.labels.push(horaActual);
-                chart.data.datasets[0].data.push(hum);
-                chart.data.datasets[1].data.push(luz);
-                chart.data.datasets[2].data.push(temp);
-                chart.update();
+                chart.data.datasets[0].data.push(hum);  
+                chart.data.datasets[1].data.push(luz);  
+                chart.data.datasets[2].data.push(temp); 
+                
+                chart.update('none');
             }
         }
     };
 
     socket.onclose = function() {
-        console.warn("Conexión WebSocket cerrada. Reintentando en 3 segundos...");
         document.getElementById("conexion").textContent = "Sin Conexión";
         document.getElementById("indicador").style.backgroundColor = "#d9534f";
         setTimeout(conectarWebSocket, 3000);
@@ -104,7 +148,6 @@ function enviarComando(estado) {
         alert("No hay conexión con el servidor WebSocket.");
     }
 }
-
 
 window.onload = function() {
     inicializarGrafica();

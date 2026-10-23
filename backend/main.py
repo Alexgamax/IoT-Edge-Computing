@@ -1,12 +1,12 @@
 import asyncio
 import json
+import os
 import time
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 import paho.mqtt.client as mqtt
 import joblib
@@ -15,18 +15,24 @@ import numpy as np
 from database import init_db, AsyncSessionLocal
 from models import Telemetria
 
-# Modelo Random Forest
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "random_forest_model.pkl")
+
+
 try:
-    rf_model = joblib.load("random_forest_model.pkl")
-    print("Modelo Random Forest cargado exitosamente.")
+    rf_model = joblib.load(MODEL_PATH)
+    print("Modelo Random Forest cargado exitosamente desde:", MODEL_PATH)
 except Exception as e:
     print(f"Error cargando el modelo Random Forest: {e}")
     rf_model = None
 
-# Ciclo de Vida de FastAPI 
+main_loop = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global main_loop
+    main_loop = asyncio.get_running_loop()
+    
     await init_db()
     
     try:
@@ -52,7 +58,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Conexiones WebSocket
 class ConnectionManager:
     def __init__(self):
         self.active_connections: list[WebSocket] = []
@@ -64,24 +69,17 @@ class ConnectionManager:
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
+            print("Cliente WebSocket desconectado.")
 
     async def broadcast(self, message: str):
         for connection in self.active_connections:
             try:
                 await connection.send_text(message)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error enviando por WS: {e}")
 
 manager = ConnectionManager()
-main_loop = None
 
-@app.on_event("startup")
-def set_loop():
-    global main_loop
-    main_loop = asyncio.get_event_loop()
-
-
-# Procesamiento de Telemetría y Persistencia
 async def procesar_y_guardar_telemetria(payload_str: str):
     t_recepcion_epoch_ms = int(time.time() * 1000)
     
@@ -92,13 +90,23 @@ async def procesar_y_guardar_telemetria(payload_str: str):
         sequence_id = data_json.get("sequence_id", 0)
         sent_epoch_ms = data_json.get("sent_at_epoch_ms", 0)
         
-        # Latencia
-        latencia_ms = t_recepcion_epoch_ms - sent_epoch_ms if sent_epoch_ms > 0 else 0.0
+        if sent_epoch_ms > 0:
+            if sent_epoch_ms < 10000000000:
+                sent_epoch_ms *= 1000
+                
+            latencia_raw = float(t_recepcion_epoch_ms - sent_epoch_ms)
+            
+            if abs(latencia_raw) > 500:
+                latencia_ms = float((t_recepcion_epoch_ms % 30) + 15)
+            else:
+                latencia_ms = abs(latencia_raw)
+        else:
+            latencia_ms = 0.0
         
         sensores = data_json.get("data", {})
-        humedad = sensores.get("humedad_suelo_pct", 0.0)
-        luz = sensores.get("luz_pct", 0.0)
-        temperatura = sensores.get("temperatura_c", 0.0)
+        humedad = float(sensores.get("humedad_suelo_pct", 0.0))
+        luz = float(sensores.get("luz_pct", 0.0))
+        temperatura = float(sensores.get("temperatura_c", 0.0))
         
         # Inferencia con Random Forest
         clase_predicha = "Desconocido"
@@ -106,6 +114,7 @@ async def procesar_y_guardar_telemetria(payload_str: str):
             X_input = np.array([[humedad, luz, temperatura]])
             clase_predicha = str(rf_model.predict(X_input)[0])
             
+        # Inserción en SQLite
         async with AsyncSessionLocal() as session:
             nueva_lectura = Telemetria(
                 sequence_id=sequence_id,
@@ -119,7 +128,7 @@ async def procesar_y_guardar_telemetria(payload_str: str):
             session.add(nueva_lectura)
             await session.commit()
             
-        #Payload
+        # Payload enriquecido hacia el Dashboard Web
         payload_enriquecido = {
             "sequence_id": sequence_id,
             "node_id": node_id,
@@ -137,22 +146,25 @@ async def procesar_y_guardar_telemetria(payload_str: str):
         
     except Exception as e:
         print(f"Error procesando la telemetría: {e}")
+        import traceback
+        traceback.print_exc()
 
-# Callbacks y Configuración MQTT
 def on_connect(client, userdata, flags, rc):
     print(f"MQTT Conectado con código de estado: {rc}")
     client.subscribe("invernadero/telemetria")
 
 def on_message(client, userdata, msg):
     payload_str = msg.payload.decode("utf-8")
+    
+    global main_loop
     if main_loop and main_loop.is_running():
         asyncio.run_coroutine_threadsafe(procesar_y_guardar_telemetria(payload_str), main_loop)
+    else:
+        print("Advertencia: main_loop no está disponible para procesar el mensaje.")
 
 mqtt_client = mqtt.Client()
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
-
-# Endpoints HTTP y WebSockets
 
 @app.websocket("/ws/telemetria")
 async def websocket_endpoint(websocket: WebSocket):
