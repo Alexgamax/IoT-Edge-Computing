@@ -18,7 +18,8 @@ function inicializarGrafica() {
                     fill: false, 
                     tension: 0.2,
                     borderWidth: 2,
-                    pointRadius: 3
+                    pointRadius: 2,
+                    yAxisID: 'y' 
                 },
                 { 
                     label: 'Luz (%)', 
@@ -28,7 +29,8 @@ function inicializarGrafica() {
                     fill: false, 
                     tension: 0.2,
                     borderWidth: 2,
-                    pointRadius: 3
+                    pointRadius: 2,
+                    yAxisID: 'y'
                 },
                 { 
                     label: 'Temperatura (°C)', 
@@ -38,24 +40,54 @@ function inicializarGrafica() {
                     fill: false, 
                     tension: 0.2,
                     borderWidth: 2,
-                    pointRadius: 3
+                    pointRadius: 2,
+                    yAxisID: 'y'
+                },
+                { 
+                    label: 'Latencia Red (ms)', 
+                    borderColor: '#6f42c1', 
+                    backgroundColor: 'rgba(111, 66, 193, 0.1)',
+                    data: [], 
+                    fill: false, 
+                    tension: 0.2,
+                    borderWidth: 2,
+                    borderDash: [5, 5], 
+                    pointRadius: 2,
+                    yAxisID: 'y1' 
                 }
             ]
         },
         options: {
             responsive: true,
-            maintainAspectRatio: false, // CRÍTICO: Permite que tome los 320px de alto del contenedor
+            maintainAspectRatio: false,
             animation: false,
+            interaction: {
+                mode: 'index',
+                intersect: false,
+            },
             scales: {
                 x: { 
                     display: true, 
                     title: { display: true, text: 'Tiempo (Hora)' } 
                 },
                 y: { 
+                    type: 'linear',
                     display: true,
+                    position: 'left',
                     beginAtZero: true,
                     max: 100,
-                    title: { display: true, text: 'Valor (%) / (°C)' }
+                    title: { display: true, text: 'Sensores (% / °C)' }
+                },
+                y1: { 
+                    type: 'linear',
+                    display: true,
+                    position: 'right',
+                    beginAtZero: true,
+                    suggestedMax: 100,
+                    title: { display: true, text: 'Latencia Red (ms)' },
+                    grid: {
+                        drawOnChartArea: false 
+                    }
                 }
             }
         }
@@ -78,11 +110,12 @@ function conectarWebSocket() {
             const hum = parseFloat(payload.data.humedad_suelo_pct);
             const luz = parseFloat(payload.data.luz_pct);
             const temp = parseFloat(payload.data.temperatura_c);
+            const lat = parseFloat(payload.latencia_ms);
 
             document.getElementById("humedad").textContent = hum.toFixed(1);
             document.getElementById("luz").textContent = luz.toFixed(1);
             document.getElementById("temperatura").textContent = temp.toFixed(1);
-            document.getElementById("latencia").textContent = payload.latencia_ms.toFixed(0);
+            document.getElementById("latencia").textContent = lat.toFixed(0);
 
             const badge = document.getElementById("badgeDiagnostico");
             const diag = payload.diagnostico_rf;
@@ -105,17 +138,19 @@ function conectarWebSocket() {
             document.getElementById("actualizacion").textContent = "Última act: " + horaActual;
 
             if (chart) {
-                if (chart.data.labels.length > 15) {
+                if (chart.data.labels.length > 20) {
                     chart.data.labels.shift();
                     chart.data.datasets[0].data.shift();
                     chart.data.datasets[1].data.shift();
                     chart.data.datasets[2].data.shift();
+                    chart.data.datasets[3].data.shift(); 
                 }
                 
                 chart.data.labels.push(horaActual);
                 chart.data.datasets[0].data.push(hum);  
                 chart.data.datasets[1].data.push(luz);  
                 chart.data.datasets[2].data.push(temp); 
+                chart.data.datasets[3].data.push(lat);  
                 
                 chart.update('none');
             }
